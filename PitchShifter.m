@@ -3,9 +3,16 @@ clf
 clear all
 
 % Read an audio file
-soundFile = 'F:\Fall 2020\ECE 484\sample1.wav';
+soundFile = 'F:\Fall 2020\ECE 484\rooster.mp3';
 [input1, Fs] = audioread(soundFile);
-%sound(input, Fs);
+
+if ~contains(soundFile, 'tone')
+    if contains(soundFile, '.mp3')
+        outputSoundFile = strrep(soundFile, '.mp3', '-shifted.wav');
+    elseif contains(soundFile, '.wav')
+        outputSoundFile = strrep(soundFile, '.wav', '-shifted.wav');
+    end
+end
 
 numChannels = size(input1,2);
 
@@ -23,12 +30,12 @@ Ratio = 1.06;
 hopSizeS = int64(Ratio * hopSizeA);
 
 numHops = ceil(size(input1,1)/hopSizeA);
-magsA = zeros(numHops, frameSize, numChannels);
-phasesA = zeros(numHops, frameSize, numChannels);
+magsA = zeros(frameSize);
+phasesA = zeros(frameSize);
 
-magsS = zeros(numHops, frameSize, numChannels);
-phasesS = zeros(numHops, frameSize, numChannels);
-framesS = zeros(numHops, frameSize, numChannels);
+magsS = zeros(frameSize);
+phasesS = zeros(frameSize);
+framesS = zeros(frameSize);
 
 % Pad the input array
 padArray = zeros(frameSize, numChannels);
@@ -36,7 +43,7 @@ input = [input1;padArray];
 output = zeros(3*size(input, 1), numChannels);
 
 % Hann window
-w = 0.5*(1-cos(2*pi*(0:n-1)'/(n)));
+w = 0.5*(1-cos(2*pi*(0:frameSize-1)'/(frameSize)));
 wS = w;
 
 % Stacking windows with hop ratio < 0.25 will become large and start
@@ -63,52 +70,49 @@ maxS = max(testWindowS);
 wS = wS/maxS;
 
 
-% Perform STFT Analysis step
 for channel = 1:numChannels
     for hopA = 1:numHops
+        
+        % Perform STFT Analysis step
         frameStartA = (hopA - 1) * hopSizeA + 1;
         frameEndA = frameStartA + frameSize - 1;
         window = w .* input(frameStartA:frameEndA, channel);
         window = circshift(window, frameSize/2);
         framefft = fft(window);
-        magsA(hopA, :, channel) = abs(framefft).';
-        phasesA(hopA, :, channel) = atan2(imag(framefft), real(framefft)).';
-    end
-end
-
-omegakh = 2 * pi * (0:frameSize-1) * hopSizeA / frameSize;
-%Do Phase stuff
-for channel = 1:numChannels
-    for hop = 1:numHops
+        magsA = abs(framefft).';
+        phasesA = atan2(imag(framefft), real(framefft)).';
         
-      if hop == 1
-          magsS(hop, :, channel) = magsA(hop, :, channel);
-          phasesS(hop, :, channel) = phasesA(hop, :, channel);
-      else
-          magsS(hop, :, channel) = magsA(hop, :, channel);
-          phaseDiff = phasesA(hop, :, channel) - phasesA(hop - 1, :, channel);
+        %Do Phase stuff
+        omegakh = 2 * pi * (0:frameSize-1) * hopSizeA / frameSize;
+        if hopA == 1
+          magsS = magsA;
+          phasesS = phasesA;
+        else
+          magsS = magsA;
+          phaseDiff = phasesA - prevPhasesA;
           test1 = phaseDiff - omegakh;
           test1 = test1 - round(test1/(2*pi))*2*pi;
           test1 = (test1 + omegakh) * Ratio;
-          phasesS(hop, :, channel) = test1 + phasesS(hop-1, :, channel);
-      end
+          phasesS = test1 + prevPhasesS;
+        end
+        prevPhasesA = phasesA;
+        prevPhasesS = phasesS;
       
-      framesS(hop, :, channel) = magsS(hop, :, channel) .* cos(phasesS(hop, :, channel)) + 1i * magsS(hop, :, channel) .* sin(phasesS(hop, :, channel));
-    end
-end
+        framesS = magsS .* cos(phasesS) + 1i * magsS .* sin(phasesS);
 
-% Synthesis step
-for channel = 1:numChannels
-    for hop = 1:numHops
-        frameStartS = (hop - 1) * hopSizeS + 1;
+        % Synthesis step
+        frameStartS = (hopA - 1) * hopSizeS + 1;
         frameEndS = frameStartS + frameSize - 1;
-        frameSifft = real(ifft(framesS(hop, :, channel)));
+        frameSifft = real(ifft(framesS));
         windowS = circshift(frameSifft, frameSize/2);
                 
         output(frameStartS:frameEndS, channel) = output(frameStartS:frameEndS, channel) + windowS.';
     end
 end
 output1 = resample(output, dem, num);
+if ~contains(soundFile, 'tone')
+    audiowrite(outputSoundFile, output1, Fs)
+end
 figure(2)
 plot(abs(fft(output1, Fs)))
 title("Frequency Magnitude Plot for Hop Size = 32, Frame Size = 2048, Semitone Up");
